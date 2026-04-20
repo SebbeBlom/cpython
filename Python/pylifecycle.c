@@ -21,6 +21,7 @@
 #include "pycore_pathconfig.h"    // _PyPathConfig_UpdateGlobal()
 #include "pycore_pyerrors.h"      // _PyErr_Occurred()
 #include "pycore_pylifecycle.h"   // _PyErr_Print()
+#include "pycore_region.h"        // _PyRegion_FiniDeallocQueue()
 #include "pycore_pymem.h"         // _PyObject_DebugMallocStats()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_runtime.h"       // _Py_ID()
@@ -1941,6 +1942,10 @@ finalize_interp_clear(PyThreadState *tstate)
 
     /* Free any delayed free requests immediately */
     _PyMem_FiniDelayed(tstate->interp);
+
+    /* Flush any regions that were deferred onto the global dealloc queue but
+       never picked up (no other thread went idle before shutdown). */
+    _PyRegion_FiniDeallocQueue();
 
     /* finalize_interp_types may allocate Python objects so we may need to
        abandon mimalloc segments again */

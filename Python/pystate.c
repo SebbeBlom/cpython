@@ -18,6 +18,7 @@
 #include "pycore_pyerrors.h"      // _PyErr_Clear()
 #include "pycore_pylifecycle.h"   // _PyAST_Fini()
 #include "pycore_pymem.h"         // _PyMem_DebugEnabled()
+#include "pycore_region.h"        // _PyRegion_DrainDeallocQueue()
 #include "pycore_runtime.h"       // _PyRuntime
 #include "pycore_runtime_init.h"  // _PyRuntimeState_INIT
 #include "pycore_stackref.h"      // Py_STACKREF_DEBUG
@@ -2261,6 +2262,7 @@ detach_thread(PyThreadState *tstate, int detached_state)
 void
 _PyThreadState_Detach(PyThreadState *tstate)
 {
+    _PyRegion_DrainDeallocQueue(tstate);
     detach_thread(tstate, _Py_THREAD_DETACHED);
 }
 

@@ -2592,6 +2592,138 @@ void PyRegion_RecycleObject(PyObject *obj) {
 
 // TODO(regions): xFrednet: Cleanup
 //      - Move region error into core and emit it instead of runtime errors
+
+#define _REGION_DEALLOC_QUEUE_MAX 10
+
+static void
+_region_dealloc_work_exec(struct _region_dealloc_work *item)
+{
+    Py_region_t region = (Py_region_t)item->region;
+    _PyRegion_Dissolve(region);
+    _PyRegion_DecRc(region);
+    Py_XDECREF(item->name);
+    Py_XDECREF(item->dict);
+    free(item);
+}
+
+int
+_PyRegion_PushDeallocWork(Py_region_t region, PyObject *dict, PyObject *name)
+{
+    struct _region_dealloc_work *item =
+        (struct _region_dealloc_work *)malloc(sizeof(*item));
+    
+    if (item == NULL) {
+        return -1;
+    }
+
+    item->region = (uintptr_t)region;
+    item->dict   = dict;
+    item->name   = name;
+    item->next   = NULL;
+
+    _PyRuntimeState *rt = &_PyRuntime;
+    struct _region_dealloc_work *evict = NULL;
+
+    PyMutex_Lock(&rt->region_dealloc_queue.mutex);
+
+    int count = 0;
+    struct _region_dealloc_work *prev = NULL;
+    struct _region_dealloc_work *cur  = rt->region_dealloc_queue.head;
+    while (cur != NULL) {
+        count++;
+        prev = cur;
+        cur  = cur->next;
+    }
+
+    if (count >= _REGION_DEALLOC_QUEUE_MAX) {
+        if (prev != NULL && prev != rt->region_dealloc_queue.head) {
+            struct _region_dealloc_work *p = rt->region_dealloc_queue.head;
+            while (p->next != prev) {
+                p = p->next;
+            }
+            p->next = NULL;
+            evict = prev;
+        } else if (rt->region_dealloc_queue.head != NULL) {
+            evict = rt->region_dealloc_queue.head;
+            rt->region_dealloc_queue.head = evict->next;
+        }
+    }
+
+    item->next = rt->region_dealloc_queue.head;
+    rt->region_dealloc_queue.head = item;
+
+    PyMutex_Unlock(&rt->region_dealloc_queue.mutex);
+
+    if (evict != NULL) {
+        _region_dealloc_work_exec(evict);
+    }
+
+    return 0;
+}
+
+int
+_PyRegion_DequeueOneDeallocWork(void)
+{
+    _PyRuntimeState *rt = &_PyRuntime;
+    if (rt->region_dealloc_queue.head == NULL) {
+        return 0;
+    }
+    PyMutex_Lock(&rt->region_dealloc_queue.mutex);
+    struct _region_dealloc_work *item = rt->region_dealloc_queue.head;
+    if (item != NULL) {
+        rt->region_dealloc_queue.head = item->next;
+    }
+    PyMutex_Unlock(&rt->region_dealloc_queue.mutex);
+    if (item == NULL) {
+        return 0;
+    }
+    _region_dealloc_work_exec(item);
+    return 1;
+}
+
+void
+_PyRegion_DrainDeallocQueue(PyThreadState *Py_UNUSED(tstate))
+{
+    _PyRuntimeState *rt = &_PyRuntime;
+
+    if (rt->region_dealloc_queue.head == NULL) {
+        return;
+    }
+
+    PyMutex_Lock(&rt->region_dealloc_queue.mutex);
+    struct _region_dealloc_work *work = rt->region_dealloc_queue.head;
+    rt->region_dealloc_queue.head = NULL;
+    PyMutex_Unlock(&rt->region_dealloc_queue.mutex);
+
+    while (work != NULL) {
+        struct _region_dealloc_work *next = work->next;
+        _region_dealloc_work_exec(work);
+        work = next;
+    }
+}
+
+void
+_PyRegion_FiniDeallocQueue(void)
+{
+    for (;;) {
+        _PyRuntimeState *rt = &_PyRuntime;
+        PyMutex_Lock(&rt->region_dealloc_queue.mutex);
+        struct _region_dealloc_work *work = rt->region_dealloc_queue.head;
+        rt->region_dealloc_queue.head = NULL;
+        PyMutex_Unlock(&rt->region_dealloc_queue.mutex);
+
+        if (work == NULL) {
+            break;
+        }
+
+        while (work != NULL) {
+            struct _region_dealloc_work *next = work->next;
+            _region_dealloc_work_exec(work);
+            work = next;
+        }
+    }
+}
+
 // TODO(regions): xFrednet: Regions with pending merges can still be closed and send off.
 //      - Solution 1: Remove "Stage Reference" write barriers
 //      - Solution 2: Force keep these regions open, maybe with a special OPEN value

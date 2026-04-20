@@ -10,6 +10,7 @@
 #include "pycore_interpframe.h"   // _PyFrame_GetLocalsArray()
 #include "pycore_object_alloc.h"  // _PyObject_MallocWithType()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_region.h"        // _PyRegion_DequeueOneDeallocWork()
 #include "pycore_tuple.h"         // _PyTuple_MaybeUntrack()
 #include "pycore_weakref.h"       // _PyWeakref_ClearRef()
 
@@ -2076,6 +2077,8 @@ show_stats_each_generations(GCState *gcstate)
 Py_ssize_t
 _PyGC_Collect(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 {
+    _PyRegion_DequeueOneDeallocWork();
+
     GCState *gcstate = &tstate->interp->gc;
     assert(tstate->current_frame == NULL || tstate->current_frame->stackpointer != NULL);
 

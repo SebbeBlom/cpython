@@ -294,6 +294,17 @@ struct pyruntimestate {
        a pointer type.
        */
 
+    struct _region_dealloc_work {
+        uintptr_t region;
+        PyObject *dict;
+        PyObject *name;
+        struct _region_dealloc_work *next;
+    };
+    struct {
+        PyMutex mutex;
+        struct _region_dealloc_work *head;
+    } region_dealloc_queue;
+
     /* _PyRuntimeState.interpreters.main */
     PyInterpreterState _main_interpreter;
     // _main_interpreter should be the last field of _PyRuntimeState.
