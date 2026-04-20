@@ -2590,140 +2590,119 @@ void PyRegion_RecycleObject(PyObject *obj) {
         && "The object needs to be untracked before calling `PyRegion_RecycleObject()`");
 }
 
-// TODO(regions): xFrednet: Cleanup
-//      - Move region error into core and emit it instead of runtime errors
+// ============================
+// DEFERRED REGION QUEUE (FIFO)
+// ============================
 
-#define _REGION_DEALLOC_QUEUE_MAX 10
+/* Queue capacity. If the queue is full the pushing thread deallocates the
+ * new item inline rather than deferring it. */
+#define _DEFERRED_REGION_QUEUE_MAX 10
 
-static void
-_region_dealloc_work_exec(struct _region_dealloc_work *item)
+/* Short-hand for the global deferred-region queue embedded in _PyRuntime. */
+#define DRQ (&_PyRuntime.deferred_region_queue)
+
+/* Deallocates the given deferred region. Caller must hold no locks.
+ * Returns 0 on success, -1 if dissolve failed. */
+static int
+_deallocate_deferred_region(struct _deferred_region *dr)
 {
-    Py_region_t region = (Py_region_t)item->region;
-    _PyRegion_Dissolve(region);
+    if (dr == NULL) return 0;
+    Py_region_t region = (Py_region_t)dr->region;
+    if (_PyRegion_Dissolve(region) != 0) return -1;
     _PyRegion_DecRc(region);
-    Py_XDECREF(item->name);
-    Py_XDECREF(item->dict);
-    free(item);
+    Py_XDECREF(dr->name);
+    Py_XDECREF(dr->dict);
+    free(dr);
+    return 0;
 }
 
+
+/* Pushes a deferred region (essentially `_PyRegionObject`) onto the global queue. 
+ * Returns 0 on success (region was enqueued OR executed
+ * inline if the queue was full), -1 only if malloc fails
+ * (if -1 then caller must deallocate region synchronously). */
 int
-_PyRegion_PushDeallocWork(Py_region_t region, PyObject *dict, PyObject *name)
+_PyRegion_PushDeferredRegion(Py_region_t region, PyObject *dict, PyObject *name)
 {
-    struct _region_dealloc_work *item =
-        (struct _region_dealloc_work *)malloc(sizeof(*item));
-    
-    if (item == NULL) {
-        return -1;
+    // TODO: Perhaps pass `_PyRegionObject` instead of fields incase of stuff added later
+    struct _deferred_region *dr = malloc(sizeof(*dr));
+    if (dr == NULL) return -1;
+
+    dr->region = region;
+    dr->dict   = dict;
+    dr->name   = name;
+    dr->next   = NULL;
+
+    PyMutex_Lock(&DRQ->mutex);
+    if (DRQ->count >= _DEFERRED_REGION_QUEUE_MAX) {
+        PyMutex_Unlock(&DRQ->mutex);
+        /* If queue is full producer deallocates the region being inserted inline,
+         * effectively taking the O(N) cost. */ 
+        // TODO: Possibly want to deallocate the oldest item, then push the new one instead.
+        return _deallocate_deferred_region(dr);
     }
-
-    item->region = (uintptr_t)region;
-    item->dict   = dict;
-    item->name   = name;
-    item->next   = NULL;
-
-    _PyRuntimeState *rt = &_PyRuntime;
-    struct _region_dealloc_work *evict = NULL;
-
-    PyMutex_Lock(&rt->region_dealloc_queue.mutex);
-
-    int count = 0;
-    struct _region_dealloc_work *prev = NULL;
-    struct _region_dealloc_work *cur  = rt->region_dealloc_queue.head;
-    while (cur != NULL) {
-        count++;
-        prev = cur;
-        cur  = cur->next;
+    if (DRQ->tail != NULL) {
+        DRQ->tail->next = dr;
+    } else {
+        DRQ->head = dr;
     }
-
-    if (count >= _REGION_DEALLOC_QUEUE_MAX) {
-        if (prev != NULL && prev != rt->region_dealloc_queue.head) {
-            struct _region_dealloc_work *p = rt->region_dealloc_queue.head;
-            while (p->next != prev) {
-                p = p->next;
-            }
-            p->next = NULL;
-            evict = prev;
-        } else if (rt->region_dealloc_queue.head != NULL) {
-            evict = rt->region_dealloc_queue.head;
-            rt->region_dealloc_queue.head = evict->next;
-        }
-    }
-
-    item->next = rt->region_dealloc_queue.head;
-    rt->region_dealloc_queue.head = item;
-
-    PyMutex_Unlock(&rt->region_dealloc_queue.mutex);
-
-    if (evict != NULL) {
-        _region_dealloc_work_exec(evict);
-    }
+    DRQ->tail  = dr;
+    DRQ->count++;
+    PyMutex_Unlock(&DRQ->mutex);
 
     return 0;
 }
 
+/* Dequeue and deallocate the oldest deferred region.  
+ * Returns 0 if work was done or if the queue was empty.  
+ * Called from _PyGC_Collect so every GC pass deallocates
+ * one deferred region. */
 int
-_PyRegion_DequeueOneDeallocWork(void)
+_PyRegion_DeallocateOldestDeferredRegion(void)
 {
-    _PyRuntimeState *rt = &_PyRuntime;
-    if (rt->region_dealloc_queue.head == NULL) {
-        return 0;
-    }
-    PyMutex_Lock(&rt->region_dealloc_queue.mutex);
-    struct _region_dealloc_work *item = rt->region_dealloc_queue.head;
-    if (item != NULL) {
-        rt->region_dealloc_queue.head = item->next;
-    }
-    PyMutex_Unlock(&rt->region_dealloc_queue.mutex);
-    if (item == NULL) {
-        return 0;
-    }
-    _region_dealloc_work_exec(item);
-    return 1;
-}
+    struct _deferred_region *dr;
 
-void
-_PyRegion_DrainDeallocQueue(PyThreadState *Py_UNUSED(tstate))
-{
-    _PyRuntimeState *rt = &_PyRuntime;
-
-    if (rt->region_dealloc_queue.head == NULL) {
-        return;
-    }
-
-    PyMutex_Lock(&rt->region_dealloc_queue.mutex);
-    struct _region_dealloc_work *work = rt->region_dealloc_queue.head;
-    rt->region_dealloc_queue.head = NULL;
-    PyMutex_Unlock(&rt->region_dealloc_queue.mutex);
-
-    while (work != NULL) {
-        struct _region_dealloc_work *next = work->next;
-        _region_dealloc_work_exec(work);
-        work = next;
-    }
-}
-
-void
-_PyRegion_FiniDeallocQueue(void)
-{
-    for (;;) {
-        _PyRuntimeState *rt = &_PyRuntime;
-        PyMutex_Lock(&rt->region_dealloc_queue.mutex);
-        struct _region_dealloc_work *work = rt->region_dealloc_queue.head;
-        rt->region_dealloc_queue.head = NULL;
-        PyMutex_Unlock(&rt->region_dealloc_queue.mutex);
-
-        if (work == NULL) {
-            break;
+    PyMutex_Lock(&DRQ->mutex);
+    dr = DRQ->head;
+    if (dr != NULL) {
+        DRQ->head = dr->next;
+        if (DRQ->head == NULL) {
+            DRQ->tail = NULL;
         }
+        DRQ->count--;
+    }
+    PyMutex_Unlock(&DRQ->mutex);
 
-        while (work != NULL) {
-            struct _region_dealloc_work *next = work->next;
-            _region_dealloc_work_exec(work);
-            work = next;
-        }
+    if (dr == NULL) return 0;
+
+    return _deallocate_deferred_region(dr);
+}
+
+/* Deallocates every deferred region in the global queue. 
+ * Called from _PyThreadState_Detach so any thread going 
+ * idle therby practically drains the queue. */
+void
+_PyRegion_DrainDeferredRegionQueue(void)
+{
+    if (DRQ->head == NULL) return;
+
+    PyMutex_Lock(&DRQ->mutex);
+    struct _deferred_region *dr = DRQ->head;
+    DRQ->head  = NULL;
+    DRQ->tail  = NULL;
+    DRQ->count = 0;
+    PyMutex_Unlock(&DRQ->mutex);
+
+    while (dr != NULL) {
+        struct _deferred_region *next = dr->next;
+        _deallocate_deferred_region(dr);
+        dr = next;
     }
 }
 
+
+// TODO(regions): xFrednet: Cleanup
+//      - Move region error into core and emit it instead of runtime errors
 // TODO(regions): xFrednet: Regions with pending merges can still be closed and send off.
 //      - Solution 1: Remove "Stage Reference" write barriers
 //      - Solution 2: Force keep these regions open, maybe with a special OPEN value

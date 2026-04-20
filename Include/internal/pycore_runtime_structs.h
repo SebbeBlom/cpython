@@ -137,6 +137,20 @@ struct _Py_static_objects {
     } singletons;
 };
 
+struct _deferred_region {
+    uintptr_t region;
+    PyObject *dict;
+    PyObject *name;
+    struct _deferred_region *next;
+};
+
+struct _deferred_region_queue {
+    PyMutex mutex;
+    struct _deferred_region *head;  /* oldest item — dequeued first */
+    struct _deferred_region *tail;  /* newest item — enqueued last  */
+    int count;
+};
+
 /* Full Python runtime state */
 
 /* _PyRuntimeState holds the global state for the CPython runtime.
@@ -294,16 +308,13 @@ struct pyruntimestate {
        a pointer type.
        */
 
-    struct _region_dealloc_work {
-        uintptr_t region;
-        PyObject *dict;
-        PyObject *name;
-        struct _region_dealloc_work *next;
-    };
-    struct {
-        PyMutex mutex;
-        struct _region_dealloc_work *head;
-    } region_dealloc_queue;
+    /* When a region bridge is deleted (`Region_dealloc` in `regionobject.c`)
+     * the cleanup work (dissolving the region and cascading `Py_DECREF`
+     * across all contained objects) is pushed here instead of running inline
+     * on the calling interpreter. Any interpreter thread drains
+     * the queue at the next idle point (currently `_PyThreadState_Detach`,
+     * i.e. just before blocking I/O or a GIL drop). */
+    struct _deferred_region_queue deferred_region_queue;
 
     /* _PyRuntimeState.interpreters.main */
     PyInterpreterState _main_interpreter;

@@ -268,7 +268,7 @@ Region_dealloc(PyObject *self)
 
         _PyRegion_RemoveBridge(region);
 
-        if (_PyRegion_PushDeallocWork(region, dict, name) == 0) {
+        if (_PyRegion_PushDeferredRegion(region, dict, name) == 0) {
             PyTypeObject *tp = Py_TYPE(self);
             freefunc free_func = PyType_GetSlot(tp, Py_tp_free);
             free_func(self);

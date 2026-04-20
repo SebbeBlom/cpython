@@ -14,7 +14,7 @@
 #include "pycore_region.h"
 #include "pycore_regionobject.h"
 #include "pycore_runtime.h"          // _PyRuntime
-#include "pycore_runtime_structs.h"  // struct _region_dealloc_work
+#include "pycore_runtime_structs.h"  // struct _deferred_region_queue
 
 /*[clinic input]
 module regions
@@ -120,28 +120,23 @@ regions_get_last_dirty_reason_impl(PyObject *module)
 }
 
 static PyObject *
-regions_dealloc_queue_size(PyObject *Py_UNUSED(module), PyObject *Py_UNUSED(args))
+regions_deferred_region_queue_size(PyObject *Py_UNUSED(module), PyObject *Py_UNUSED(args))
 {
-    /* Count items currently sitting in the global deferred-dealloc queue.
+    /* Return the number of regions sitting in the global deferred regions queue.
      * Useful in benchmarks to verify that del-r pushed work and that a
      * consumer interpreter later drained it. */
-    _PyRuntimeState *rt = &_PyRuntime;
-    PyMutex_Lock(&rt->region_dealloc_queue.mutex);
-    Py_ssize_t n = 0;
-    struct _region_dealloc_work *item = rt->region_dealloc_queue.head;
-    while (item != NULL) {
-        n++;
-        item = item->next;
-    }
-    PyMutex_Unlock(&rt->region_dealloc_queue.mutex);
+    struct _deferred_region_queue *drq = &_PyRuntime.deferred_region_queue;
+    PyMutex_Lock(&drq->mutex);
+    Py_ssize_t n = drq->count;
+    PyMutex_Unlock(&drq->mutex);
     return PyLong_FromSsize_t(n);
 }
 
 static struct PyMethodDef regions_methods[] = {
     REGIONS_IS_LOCAL_METHODDEF
     REGIONS_GET_LAST_DIRTY_REASON_METHODDEF
-    {"dealloc_queue_size", regions_dealloc_queue_size, METH_NOARGS,
-     "Return the number of regions currently waiting in the global\n"
+    {"deferred_region_queue_size", regions_deferred_region_queue_size, METH_NOARGS,
+     "Return the number of regions currently waiting to be deallocated in the global\n"
      "deferred-deallocation queue.  Thread-safe; O(queue_size)."},
     { NULL, NULL }
 };
