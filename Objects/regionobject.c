@@ -255,30 +255,7 @@ Region_dealloc(PyObject *self)
 
     PyObject_GC_UnTrack(self);
 
-    _PyRegionObject *region_obj = _PyRegionObject_CAST(self);
-
-    if (region_obj->region != NULL_REGION) {
-        Py_region_t region = region_obj->region;
-        PyObject   *dict   = region_obj->dict;
-        PyObject   *name   = region_obj->name;
-
-        region_obj->region = NULL_REGION;
-        region_obj->dict   = NULL;
-        region_obj->name   = NULL;
-
-        _PyRegion_RemoveBridge(region);
-
-        if (_PyRegion_PushDeferredRegion(region, dict, name) == 0) {
-            PyTypeObject *tp = Py_TYPE(self);
-            freefunc free_func = PyType_GetSlot(tp, Py_tp_free);
-            free_func(self);
-            return;
-        }
-
-        region_obj->region = region;
-        region_obj->dict   = dict;
-        region_obj->name   = name;
-    }
+    if (_PyRegion_PushDeferredRegion(_PyRegionObject_CAST(self)) == 0) return;    
 
     Region_clear(self);
 

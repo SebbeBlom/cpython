@@ -138,9 +138,7 @@ struct _Py_static_objects {
 };
 
 struct _deferred_region {
-    uintptr_t region;
-    PyObject *dict;
-    PyObject *name;
+    PyObject *bridge;
     struct _deferred_region *next;
 };
 

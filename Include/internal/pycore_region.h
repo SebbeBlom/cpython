@@ -157,8 +157,7 @@ PyAPI_FUNC(int) _PyRegion_HasOwner(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_SetCown(_PyRegionObject* bridge, _PyCownObject *cown);
 PyAPI_FUNC(int) _PyRegion_RemoveCown(_PyRegionObject* bridge, _PyCownObject *cown);
 
-PyAPI_FUNC(int)  _PyRegion_PushDeferredRegion(Py_region_t region,
-                                           PyObject *dict, PyObject *name);
+PyAPI_FUNC(int)  _PyRegion_PushDeferredRegion(_PyRegionObject *bridge);
 PyAPI_FUNC(int)  _PyRegion_DeallocateOldestDeferredRegion(void);
 PyAPI_FUNC(void) _PyRegion_DrainDeferredRegionQueue(void);
 

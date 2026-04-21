@@ -2598,7 +2598,7 @@ void PyRegion_RecycleObject(PyObject *obj) {
  * new item inline rather than deferring it. */
 #define _DEFERRED_REGION_QUEUE_MAX 10
 
-/* Short-hand for the global deferred-region queue embedded in _PyRuntime. */
+/* Short-hand for the `deferred_region_queue` embedded in _PyRuntime. */
 #define DRQ (&_PyRuntime.deferred_region_queue)
 
 /* Deallocates the given deferred region. Caller must hold no locks.
@@ -2607,31 +2607,38 @@ static int
 _deallocate_deferred_region(struct _deferred_region *dr)
 {
     if (dr == NULL) return 0;
-    Py_region_t region = (Py_region_t)dr->region;
-    if (_PyRegion_Dissolve(region) != 0) return -1;
-    _PyRegion_DecRc(region);
-    Py_XDECREF(dr->name);
-    Py_XDECREF(dr->dict);
+    
+    _PyRegionObject *bridge = _PyRegionObject_CAST(dr->bridge);
+
+    if (bridge->region != NULL_REGION) {
+        _PyRegion_Dissolve(bridge->region);
+        _PyRegion_RemoveBridge(bridge->region);
+        _PyRegion_DecRc(bridge->region);
+        bridge->region = NULL_REGION;
+    }
+
+    // PyTypeObject *tp = Py_TYPE(dr->bridge);
+    // freefunc free_func = PyType_GetSlot(tp, Py_tp_free);
+    // free_func(dr->bridge);
     free(dr);
     return 0;
 }
 
 
-/* Pushes a deferred region (essentially `_PyRegionObject`) onto the global queue. 
+/* Pushes a deferred region (essentially `_PyRegionObject`) 
+ * onto the runtime `deferred_region_queue`. 
  * Returns 0 on success (region was enqueued OR executed
  * inline if the queue was full), -1 only if malloc fails
  * (if -1 then caller must deallocate region synchronously). */
 int
-_PyRegion_PushDeferredRegion(Py_region_t region, PyObject *dict, PyObject *name)
+_PyRegion_PushDeferredRegion(_PyRegionObject *bridge)
 {
     // TODO: Perhaps pass `_PyRegionObject` instead of fields incase of stuff added later
     struct _deferred_region *dr = malloc(sizeof(*dr));
     if (dr == NULL) return -1;
 
-    dr->region = region;
-    dr->dict   = dict;
-    dr->name   = name;
-    dr->next   = NULL;
+    dr->bridge = _PyObject_CAST(bridge);
+    dr->next = NULL;
 
     PyMutex_Lock(&DRQ->mutex);
     if (DRQ->count >= _DEFERRED_REGION_QUEUE_MAX) {
@@ -2678,7 +2685,7 @@ _PyRegion_DeallocateOldestDeferredRegion(void)
     return _deallocate_deferred_region(dr);
 }
 
-/* Deallocates every deferred region in the global queue. 
+/* Deallocates every deferred region the runtime `deferred_region_queue`. 
  * Called from _PyThreadState_Detach so any thread going 
  * idle therby practically drains the queue. */
 void

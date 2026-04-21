@@ -2077,7 +2077,8 @@ show_stats_each_generations(GCState *gcstate)
 Py_ssize_t
 _PyGC_Collect(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 {
-    _PyRegion_DeallocateOldestDeferredRegion();
+    // TODO: introduce region deallocation to the GC
+    //  _PyRegion_DeallocateOldestDeferredRegion();
 
     GCState *gcstate = &tstate->interp->gc;
     assert(tstate->current_frame == NULL || tstate->current_frame->stackpointer != NULL);
