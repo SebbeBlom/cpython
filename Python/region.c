@@ -2610,16 +2610,22 @@ _deallocate_deferred_region(struct _deferred_region *dr)
     
     _PyRegionObject *bridge = _PyRegionObject_CAST(dr->bridge);
 
+    // This is exactly `Region_clear` 
     if (bridge->region != NULL_REGION) {
         _PyRegion_Dissolve(bridge->region);
         _PyRegion_RemoveBridge(bridge->region);
         _PyRegion_DecRc(bridge->region);
         bridge->region = NULL_REGION;
     }
+    Py_CLEAR(bridge->name);
+    Py_CLEAR(bridge->dict);
 
-    // PyTypeObject *tp = Py_TYPE(dr->bridge);
-    // freefunc free_func = PyType_GetSlot(tp, Py_tp_free);
-    // free_func(dr->bridge);
+    // For sub-interpreter might use different allocators?
+    // so this is required
+    PyTypeObject *tp = Py_TYPE(_PyObject_CAST(bridge));
+    freefunc free_func = PyType_GetSlot(tp, Py_tp_free);                                                                                                         
+    free_func(_PyObject_CAST(bridge));                                                                                                                           
+    
     free(dr);
     return 0;
 }

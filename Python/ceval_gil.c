@@ -1391,6 +1391,8 @@ _Py_HandlePending(PyThreadState *tstate)
 
     /* GC scheduled to run */
     if ((breaker & _PY_GC_SCHEDULED_BIT) != 0) {
+        // TODO: possibly run deferred region deallocation here instead of in GC_collect?
+        // or even when we set the _PY_GC_SCHEDULED_BIT
         _Py_unset_eval_breaker_bit(tstate, _PY_GC_SCHEDULED_BIT);
         _Py_RunGC(tstate);
     }

@@ -2262,6 +2262,9 @@ detach_thread(PyThreadState *tstate, int detached_state)
 void
 _PyThreadState_Detach(PyThreadState *tstate)
 {
+    // TODO: Possibly move this to _PyThreadState_Suspend so it is only used for stop the world
+    // Very cool would be if we have high "load" on the DRQ we could enable it here?
+    // _PyThreadState_Suspend is however only scheduled when we have Py_GIL_DISABLED
     _PyRegion_DeallocateOldestDeferredRegion();
     detach_thread(tstate, _Py_THREAD_DETACHED);
 }

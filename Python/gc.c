@@ -2078,7 +2078,8 @@ Py_ssize_t
 _PyGC_Collect(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 {
     // TODO: introduce region deallocation to the GC
-    //  _PyRegion_DeallocateOldestDeferredRegion();
+    // Possibly move to when the GC_Collect is scheduled
+    _PyRegion_DeallocateOldestDeferredRegion();
 
     GCState *gcstate = &tstate->interp->gc;
     assert(tstate->current_frame == NULL || tstate->current_frame->stackpointer != NULL);
@@ -2297,6 +2298,8 @@ _Py_ScheduleGC(PyThreadState *tstate)
 {
     if (!_Py_eval_breaker_bit_is_set(tstate, _PY_GC_SCHEDULED_BIT))
     {
+        // TODO: Possibly, deallocate deferred region when we
+        // schedule the GC instead of in the GC?
         _Py_set_eval_breaker_bit(tstate, _PY_GC_SCHEDULED_BIT);
     }
 }

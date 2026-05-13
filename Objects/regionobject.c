@@ -255,7 +255,16 @@ Region_dealloc(PyObject *self)
 
     PyObject_GC_UnTrack(self);
 
-    if (_PyRegion_PushDeferredRegion(_PyRegionObject_CAST(self)) == 0) return;    
+    // If and only if a region is closed shall we even attempt to deallocate it on another region
+    // Otherwise there might still be borrowed references to the region,
+    // or subregions with borrowed references or with multiple references to its bridge.
+    // TODO: For the future if we were to ever add a object count in region then we could possibly
+    // have a better heuristic for determining if we want to push or dealloc inline.
+    if (!_PyRegion_IsOpen(_PyRegionObject_CAST(self)->region))
+    {
+        // TODO: Documentation which explains that this defers the below code executing it later essentially.
+        if (_PyRegion_PushDeferredRegion(_PyRegionObject_CAST(self)) == 0) return;    
+    }
 
     Region_clear(self);
 
