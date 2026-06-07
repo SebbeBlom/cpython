@@ -2590,10 +2590,6 @@ void PyRegion_RecycleObject(PyObject *obj) {
         && "The object needs to be untracked before calling `PyRegion_RecycleObject()`");
 }
 
-// ============================
-// DEFERRED REGION QUEUE (FIFO)
-// ============================
-
 /* Queue capacity. If the queue is full the pushing thread deallocates the
  * new item inline rather than deferring it. */
 #define _DEFERRED_REGION_QUEUE_MAX 10
@@ -2610,7 +2606,8 @@ _deallocate_deferred_region(struct _deferred_region *dr)
     
     _PyRegionObject *bridge = _PyRegionObject_CAST(dr->bridge);
 
-    // This is exactly `Region_clear` 
+    // Lifted from `Region_clear` from 'regionobject.c'
+    /****************************************************/
     if (bridge->region != NULL_REGION) {
         _PyRegion_Dissolve(bridge->region);
         _PyRegion_RemoveBridge(bridge->region);
@@ -2619,13 +2616,16 @@ _deallocate_deferred_region(struct _deferred_region *dr)
     }
     Py_CLEAR(bridge->name);
     Py_CLEAR(bridge->dict);
+    /****************************************************/
 
-    // For sub-interpreter might use different allocators?
-    // so this is required
+    // Lifted from `Region_dealloc` from 'regionobject.c'
+    /****************************************************/
     PyTypeObject *tp = Py_TYPE(_PyObject_CAST(bridge));
-    freefunc free_func = PyType_GetSlot(tp, Py_tp_free);                                                                                                         
-    free_func(_PyObject_CAST(bridge));                                                                                                                           
+    freefunc free_func = PyType_GetSlot(tp, Py_tp_free);
+    free_func(_PyObject_CAST(bridge));
+    /****************************************************/
     
+    // Deallocate the queue node
     free(dr);
     return 0;
 }
@@ -2633,26 +2633,29 @@ _deallocate_deferred_region(struct _deferred_region *dr)
 
 /* Pushes a deferred region (essentially `_PyRegionObject`) 
  * onto the runtime `deferred_region_queue`. 
- * Returns 0 on success (region was enqueued OR executed
- * inline if the queue was full), -1 only if malloc fails
+ * Returns 0 on success region was enqueued, 
+ * -1 if queue is at capacity or malloc fails
  * (if -1 then caller must deallocate region synchronously). */
 int
 _PyRegion_PushDeferredRegion(_PyRegionObject *bridge)
 {
-    // TODO: Perhaps pass `_PyRegionObject` instead of fields incase of stuff added later
     struct _deferred_region *dr = malloc(sizeof(*dr));
+    // Return non-zero if queue allocation failed
     if (dr == NULL) return -1;
 
     dr->bridge = _PyObject_CAST(bridge);
     dr->next = NULL;
 
+    // Queue writes need to be synchronized.
     PyMutex_Lock(&DRQ->mutex);
     if (DRQ->count >= _DEFERRED_REGION_QUEUE_MAX) {
         PyMutex_Unlock(&DRQ->mutex);
-        /* If queue is full producer deallocates the region being inserted inline,
-         * effectively taking the O(N) cost. */ 
-        // TODO: Possibly want to deallocate the oldest item, then push the new one instead.
-        return _deallocate_deferred_region(dr);
+        /* If queue is full then caller must deallocate region synchronously, 
+        release the lock, free node, and return non-zero*/ 
+        // TODO: If we want we could deallocate the oldest deferred region currently in the queue
+        // and afterwards then then push the new one. A region will be deallocated either way.
+        free(dr);
+        return -1;
     }
     if (DRQ->tail != NULL) {
         DRQ->tail->next = dr;
@@ -2662,6 +2665,7 @@ _PyRegion_PushDeferredRegion(_PyRegionObject *bridge)
     DRQ->tail  = dr;
     DRQ->count++;
     PyMutex_Unlock(&DRQ->mutex);
+    // A region has successfully been deferred so release the lock and return success.
 
     return 0;
 }

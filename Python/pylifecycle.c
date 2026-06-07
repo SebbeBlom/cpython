@@ -1944,7 +1944,8 @@ finalize_interp_clear(PyThreadState *tstate)
     _PyMem_FiniDelayed(tstate->interp);
 
     /* Deallocate any regions that were deferred onto the global dealloc queue but
-       never picked up (no other thread went idle before shutdown). */
+       never picked up (threads went idle or garbage collected fewer times than the 
+       number of regions were deferred before shutdown). */
     _PyRegion_DrainDeferredRegionQueue();
 
     /* finalize_interp_types may allocate Python objects so we may need to
